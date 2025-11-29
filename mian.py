@@ -1,89 +1,104 @@
 #!/usr/bin/env python3
 import sys
-import yaml
-import argparse
+import json
 
 
-def parse_program(input_path):
-    with open(input_path, 'r', encoding='utf-8') as f:
-        program = yaml.safe_load(f)
+def mask(n):
+    return (1 << n) - 1
 
-    ir = []  # (op_code, arg)
-    for instr in program.get('program', []):
-        op = instr['op'].lower()
-        arg = instr.get('arg', 0)
 
-        if op == 'load':
-            ir.append((33, arg))
-        elif op == 'read':
-            ir.append((24, arg))
-        elif op == 'write':
-            ir.append((13, 0))
-        elif op == 'eq':
-            ir.append((54, arg))
+def execute(bytecode, mem_size=2048):
+    stack = []
+    mem = [0] * mem_size
+
+    if len(bytecode) % 5 != 0:
+        raise ValueError("Bytecode length must be multiple of 5")
+
+    i = 0
+    while i < len(bytecode):
+        cmd_bytes = bytecode[i:i+5]
+        cmd = int.from_bytes(cmd_bytes, 'little')
+        op = cmd & mask(6)  # биты 0–5
+
+        if op == 33:  # LOAD const
+            const = (cmd >> 6) & mask(27)
+            stack.append(const)
+
+        elif op == 24:  # READ [SP + offset]
+            if not stack:
+                raise RuntimeError("Stack underflow in READ")
+            offset = (cmd >> 6) & mask(11)
+            addr = stack[-1] + offset
+            if addr < 0 or addr >= len(mem):
+                raise RuntimeError(f"Memory address out of bounds: {addr}")
+            stack.append(mem[addr])
+
+        elif op == 13:  # WRITE [SP] = pop()
+            if len(stack) < 2:
+                raise RuntimeError("Stack underflow in WRITE")
+            value = stack.pop()
+            addr = stack.pop()
+            if addr < 0 or addr >= len(mem):
+                raise RuntimeError(f"Memory address out of bounds: {addr}")
+            mem[addr] = value
+
+        elif op == 54:  # EQ ==
+            if len(stack) < 2:
+                raise RuntimeError("Stack underflow in EQ")
+            addr = (cmd >> 6) & mask(32)
+            if addr < 0 or addr >= len(mem):
+                raise RuntimeError(f"Memory address out of bounds: {addr}")
+            b = stack.pop()
+            a = stack.pop()
+            mem[addr] = int(a == b)
+
         else:
-            raise ValueError(f"Unknown operation: {op}")
-    return ir
+            raise ValueError(f"Unknown opcode: {op}")
 
+        i += 5
 
-def encode_command(op, arg):
-    cmd = (arg << 6) | op
-    return cmd.to_bytes(5, 'little')
-
-
-def assemble_to_binary(ir):
-    binary = b''
-    for op, arg in ir:
-        if op == 33:
-            if arg < 0 or arg >= (1 << 27):
-                raise ValueError(f"LOAD arg {arg} out of 27-bit range")
-        elif op == 24:
-            if arg < 0 or arg >= (1 << 11):
-                raise ValueError(f"READ offset {arg} out of 11-bit range")
-        elif op == 54:
-            if arg < 0 or arg >= (1 << 32):
-                raise ValueError(f"EQ addr {arg} out of 32-bit range")
-        # Для WRITE arg игнорируется
-
-        binary += encode_command(op, arg)
-    return binary
-
-
-def format_bytes_for_test(binary):
-    lines = []
-    for i in range(0, len(binary), 5):
-        chunk = binary[i:i+5]
-        hex_str = ', '.join(f"0x{b:02X}" for b in chunk)
-        lines.append(hex_str)
-    return lines
+    return mem
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Assembler for UVM (Variant 27) — Stage 2")
-    parser.add_argument("input", help="Input YAML file")
-    parser.add_argument("output", help="Output binary file")
-    parser.add_argument("--test", action="store_true", help="Test mode: print bytes")
-
-    args = parser.parse_args()
-
-    try:
-        ir = parse_program(args.input)
-        binary = assemble_to_binary(ir)
-
-        # Запись в файл
-        with open(args.output, "wb") as f:
-            f.write(binary)
-
-        if args.test:
-            byte_lines = format_bytes_for_test(binary)
-            for line in byte_lines:
-                print(line)
-        
-        print(f"Binary size: {len(binary)} bytes")
-
-    except Exception as e:
-        print(f"Error: {e}", file=sys.stderr)
+    if len(sys.argv) != 5:
+        print("Usage: python3 uvm27.py <input.bin> <output.json> <start_addr> <end_addr>", file=sys.stderr)
         sys.exit(1)
+
+    bin_path = sys.argv[1]
+    json_path = sys.argv[2]
+    try:
+        start = int(sys.argv[3])
+        end = int(sys.argv[4])
+    except ValueError:
+        print("Error: start_addr and end_addr must be integers", file=sys.stderr)
+        sys.exit(1)
+
+    if start > end or start < 0:
+        print("Error: invalid address range", file=sys.stderr)
+        sys.exit(1)
+
+    # Загрузка программы
+    with open(bin_path, "rb") as f:
+        bytecode = f.read()
+
+    # Выполнение
+    try:
+        mem = execute(bytecode)
+    except Exception as e:
+        print(f"Runtime error: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    # Формирование дампа
+    dump = {}
+    for addr in range(start, min(end + 1, len(mem))):
+        dump[str(addr)] = mem[addr]
+
+    # Запись в JSON
+    with open(json_path, "w", encoding="utf-8") as f:
+        json.dump(dump, f, indent=2)
+
+    print(f"Memory dump saved to {json_path} (addresses {start}–{end})")
 
 
 if __name__ == "__main__":

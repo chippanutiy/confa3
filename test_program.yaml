@@ -1,10 +1,17 @@
 program:
   - op: load
-    arg: 423
+    arg: 100
   - op: load
     arg: 100
-  - op: read
-    arg: 192
+  - op: load
+    arg: 100
+  - op: write        # mem[100] = 100
+  - op: load
+    arg: 100
+  - op: load
+    arg: 50
+  - op: read         # mem[100 + 50] = mem[150] → кладёт в стек
+  - op: load
+    arg: 0
   - op: eq
-    arg: 164
-  - op: write
+    arg: 200         # mem[200] = (100 == mem[150]) → 0
