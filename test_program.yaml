@@ -1,0 +1,10 @@
+program:
+  - op: load
+    arg: 423
+  - op: load
+    arg: 100
+  - op: read
+    arg: 192
+  - op: eq
+    arg: 164
+  - op: write
